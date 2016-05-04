@@ -32,6 +32,9 @@
 #include <asm/smp_plat.h>
 #include <linux/suspend.h>
 
+/* only enable on demand if needed */
+static bool load_stats_enabled = true;
+
 #define MAX_LONG_SIZE 24
 #define DEFAULT_RQ_POLL_JIFFIES 1
 #define DEFAULT_DEF_TIMER_JIFFIES 5
@@ -53,40 +56,6 @@ struct cpu_load_data {
 };
 
 static DEFINE_PER_CPU(struct cpu_load_data, cpuload);
-
-static inline u64 get_cpu_idle_time_jiffy(unsigned int cpu, u64 *wall)
-{
-	u64 idle_time;
-	u64 cur_wall_time;
-	u64 busy_time;
-
-	cur_wall_time = jiffies64_to_cputime64(get_jiffies_64());
-
-	busy_time  = kcpustat_cpu(cpu).cpustat[CPUTIME_USER];
-	busy_time += kcpustat_cpu(cpu).cpustat[CPUTIME_SYSTEM];
-	busy_time += kcpustat_cpu(cpu).cpustat[CPUTIME_IRQ];
-	busy_time += kcpustat_cpu(cpu).cpustat[CPUTIME_SOFTIRQ];
-	busy_time += kcpustat_cpu(cpu).cpustat[CPUTIME_STEAL];
-	busy_time += kcpustat_cpu(cpu).cpustat[CPUTIME_NICE];
-
-	idle_time = cur_wall_time - busy_time;
-	if (wall)
-		*wall = jiffies_to_usecs(cur_wall_time);
-
-	return jiffies_to_usecs(idle_time);
-}
-
-static inline cputime64_t get_cpu_idle_time(unsigned int cpu, cputime64_t *wall)
-{
-	u64 idle_time = get_cpu_idle_time_us(cpu, NULL);
-
-	if (idle_time == -1ULL)
-		return get_cpu_idle_time_jiffy(cpu, wall);
-	else
-		idle_time += get_cpu_iowait_time_us(cpu, wall);
-
-	return idle_time;
-}
 
 static inline cputime64_t get_cpu_iowait_time(unsigned int cpu,
 							cputime64_t *wall)
@@ -112,7 +81,7 @@ static int update_average_load(unsigned int freq, unsigned int cpu)
         if (ret)
                 return -EINVAL;
 
-	cur_idle_time = get_cpu_idle_time(cpu, &cur_wall_time);
+	cur_idle_time = get_cpu_idle_time(cpu, &cur_wall_time, 0);
 	cur_iowait_time = get_cpu_iowait_time(cpu, &cur_wall_time);
 
 	wall_time = (unsigned int) (cur_wall_time - pcpu->prev_cpu_wall);
@@ -239,6 +208,34 @@ static int system_suspend_handler(struct notifier_block *nb,
 	return NOTIFY_OK;
 }
 
+void enable_rq_load_calc(bool on)
+{
+	int cpu;
+
+	if (on != load_stats_enabled){
+		load_stats_enabled = on;
+
+		pr_info("Enable rq_stats load calculation %d\n", load_stats_enabled);
+		if (load_stats_enabled) {
+			// clear data
+			for_each_possible_cpu(cpu) {
+				struct cpu_load_data *pcpu = &per_cpu(cpuload, cpu);
+
+				pcpu->prev_cpu_idle = 0;
+				pcpu->prev_cpu_wall = 0;
+				pcpu->avg_load_maxfreq = 0;
+			}
+
+			cpufreq_register_notifier(&freq_transition,
+					CPUFREQ_TRANSITION_NOTIFIER);
+			register_hotcpu_notifier(&cpu_hotplug);
+		} else {
+			cpufreq_unregister_notifier(&freq_transition,
+					CPUFREQ_TRANSITION_NOTIFIER);
+			unregister_hotcpu_notifier(&cpu_hotplug);
+		}
+	}
+}
 
 static ssize_t hotplug_disable_show(struct kobject *kobj,
 		struct kobj_attribute *attr, char *buf)
@@ -476,9 +473,11 @@ static int __init msm_rq_stats_init(void)
 	}
 	freq_transition.notifier_call = cpufreq_transition_handler;
 	cpu_hotplug.notifier_call = cpu_hotplug_handler;
-	cpufreq_register_notifier(&freq_transition,
+	if (load_stats_enabled){
+		cpufreq_register_notifier(&freq_transition,
 					CPUFREQ_TRANSITION_NOTIFIER);
-	register_hotcpu_notifier(&cpu_hotplug);
+		register_hotcpu_notifier(&cpu_hotplug);
+	}
 
 	return ret;
 }

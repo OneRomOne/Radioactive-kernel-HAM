@@ -1850,7 +1850,7 @@
 		<1880000 2068000>,
 		<3008000 3309000>,
 		<3760000 4136000>,
-		<4468000 2457000>;
+		<4468000 2457600>;
 	qcom,dec-ocmem-ab-ib = <0 0>,
 		<176000 519000>,
 		<456000 519000>,
@@ -1902,11 +1902,6 @@
 			qcom,vidc-partition-buffer-types = <0x480>;
 		};
 	};
-};
-
-&memory_hole {
-	qcom,memblock-remove = <0x05a00000 0x7800000
-				0x0fa00000 0x500000>; /* Address and size of the hole */
 };
 
 &gdsc_venus {
